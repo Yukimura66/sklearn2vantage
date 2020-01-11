@@ -23,7 +23,7 @@ def make_model_table_glm(model, feature_names=None, isLogistic=False,
     return pd.DataFrame(model_dict)
 
 
-def load_model_glm(df_model, engine, database_name, table_name):
+def load_model_glm(df_model, engine, table_name):
     dtype_glm_model = {"attribute": Integer, "predictor": String(length=30),
                        "category": String(length=30), "estimate": Float,
                        "family": String(length=30)}
@@ -62,7 +62,7 @@ def make_model_table_cnb(model, category_dict):
     return pd.DataFrame(model_dict)
 
 
-def load_model_nb(df_model, engine, database_name, table_name):
+def load_model_nb(df_model, engine, table_name):
     dtype_glm_model = {"class_nb": String(length=30), "variable": String(length=30),
                        "type_nb": String(length=30), "category": String(length=30),
                        "cnt": Integer, "sum_nb": Float,
