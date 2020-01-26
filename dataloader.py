@@ -6,6 +6,8 @@ import scp
 import time
 import os
 import re
+import pathlib
+import subprocess
 
 
 def tableIsExist(tablename: str, dbname: str,
@@ -53,7 +55,7 @@ def renameColumns(series: pd.Series) -> pd.Series():
 def createTable(df: pd.DataFrame,
                 engine: sqlalchemy.engine.base.Engine,
                 tablename: str, dbname: str = None,
-                overwrite: bool = False, indexList: list = None,
+                ifExists: str = "error", indexList: list = None,
                 isIndexUnique: bool = True) -> None:
     # make query string
     if dbname is None:
@@ -80,11 +82,15 @@ def createTable(df: pd.DataFrame,
                index_query_part=index_query_part)
 
     # execute query
-    if overwrite:
+    if ifExists == "replace":
         dropIfExists(tablename, dbname, engine)
-    else:
+    elif ifExists == "error":
         if tableIsExist(tablename, dbname, engine):
             raise ValueError(f"{tablename}.{dbname} is already exists.")
+    elif ifExists == "insert":
+        if tableIsExist(tablename, dbname, engine):
+            return
+
     engine.execute(query)
     print("created table \n" + query)
 
@@ -102,18 +108,111 @@ def connectSSH(hostname: str, username: str, password: str = None,
     return sshc
 
 
+def archiveFile(sourcePath: str, archivePath: str = None, method: str = "gz",
+                verbose: bool = True) -> str:
+    if archivePath is None:
+        archivePath = str(sourcePath) + "." + method
+
+    if method == "7z":
+        command = f"7z a {archivePath} {sourcePath}"
+    elif method in ["gz", "xz", "bz2"]:
+        sourceName = pathlib.Path(sourcePath).name
+        sourceFolder = pathlib.Path(sourcePath).parent
+        d_format_option = {"gz": "z", "xz": "J", "bz2": "j"}
+        command = (f"tar -C {sourceFolder} -{d_format_option[method]}cvf"
+                   + f" {archivePath} {sourceName}")
+    else:
+        raise ValueError(f"method only supports ['7z', 'gz', 'xz', 'bz2']")
+
+    with verbosity_context(f"Archiving {sourcePath} to {archivePath}",
+                           verbose):
+        if verbose:
+            print(subprocess.check_output(command,
+                                          universal_newlines=True, shell=True))
+        else:
+            subprocess.check_output(
+                command, universal_newlines=True, shell=True)
+    return archivePath
+
+
+def unarchiveSSH(archivePath: pathlib.PosixPath,
+                 sshc: paramiko.client.SSHClient,
+                 unarchiveFolder: pathlib.PosixPath = None,
+                 method: str = "gz", verbose: bool = True
+                 ) -> None:
+    if unarchiveFolder is None:
+        unarchiveFolder = archivePath.parent
+
+    if method == "7z":
+        command = f"7z e {archivePath} -o{unarchiveFolder}"
+    elif method in ["gz", "xz", "bz2"]:
+        d_format_option = {"gz": "z", "xz": "J", "bz2": "j"}
+        command = (f"tar -xv{d_format_option[method]}f"
+                   + f"{archivePath} -C {unarchiveFolder}")
+    else:
+        raise ValueError(f"method only supports ['7z', 'gz', 'xz', 'bz2']")
+
+    with verbosity_context(f"Unarchiving {archivePath}", verbose):
+        stdin, stdout, stderr = sshc.exec_command(command)
+        if verbose:
+            for line in stdout:
+                print(line)
+
+
 def uploadFile(sourcePath: str, targetPath: str,
-               sshc: paramiko.client.SSHClient) -> None:
-    with scp.SCPClient(sshc.get_transport()) as scpc:
-        scpc.put(sourcePath, targetPath)
+               sshc: paramiko.client.SSHClient,
+               compress_method: str = None,
+               verbose: bool = True) -> pathlib.Path:
+    def show_progress(filename, size, sent):
+        print(f"Uploading {filename} progress: " +
+              f"{float(sent)/float(size)*100:.2f}%", end="\r")
+    progress = show_progress if verbose else None
+
+    try:
+        if compress_method:
+            fileName = pathlib.Path(sourcePath).name
+            # change targetPath for uploading to
+            # targetPath's directory / sourcePath's name + ext.
+            targetPath = pathlib.Path(
+                str(pathlib.Path(targetPath).parent / fileName) + "."
+                + compress_method)
+            sourcePath = archiveFile(sourcePath, verbose=verbose,
+                                     method=compress_method)
+            isArchived = True
+
+        with scp.SCPClient(sshc.get_transport(), progress=progress) as scpc:
+            # in case Path is PosixPath, casting them to str
+            scpc.put(str(sourcePath), str(targetPath))
+            print("\n")  # nextline
+
+        if compress_method:
+            unarchiveSSH(targetPath, sshc, method=compress_method,
+                         verbose=verbose)
+            isUnarchived = True
+            # change targetPath to uploaded raw file
+            uploadedPath = str(pathlib.Path(targetPath).parent/fileName)
+    finally:  # delete archive files
+        if 'isArchived' in locals():
+            with verbosity_context(f"Deleting archive {sourcePath}",
+                                   verbose):
+                os.remove(sourcePath)
+        if 'isUnarchived' in locals():
+            sftp = sshc.open_sftp()
+            with verbosity_context(f"Deleting archive {targetPath} via SCP",
+                                   verbose):
+                sftp.remove(str(targetPath))
+
+    return uploadedPath if compress_method else targetPath
 
 
 def tdloadViaSSH(engine: sqlalchemy.engine.base.Engine,
                  sshc: paramiko.client.SSHClient,
-                 tablename: str, targetFile: str, dbname: str = None,
+                 tablename: str, targetPath: str,
+                 dbname: str = None,
                  jobname: str = "jobtmp", skipRowNum: int = 0,
                  verbose: bool = True) -> None:
 
+    targetPath = pathlib.Path(targetPath)
     if dbname is None:
         dbname = engine.url.database
     # always use option: QuotedData = 'Optional'
@@ -121,7 +220,7 @@ def tdloadViaSSH(engine: sqlalchemy.engine.base.Engine,
     if skipRowNum > 0:
         options += f" --SourceSkipRows {skipRowNum}"
 
-    tdload_command = (f"tdload -f {targetFile} -t {dbname}.{tablename}"
+    tdload_command = (f"tdload -f {targetPath} -t {dbname}.{tablename}"
                       + f" -h {engine.url.host} -u {engine.url.username}"
                       + f" -p {engine.url.password}"
                       + f" --TargetWorkingDatabase {dbname}"
@@ -141,44 +240,85 @@ def tdloadViaSSH(engine: sqlalchemy.engine.base.Engine,
                 print(line)
 
 
+class verbosity_context:
+    def __init__(self, processName: str, verbose: bool = True):
+        self.verbose = verbose
+        self.processName = processName
+
+    def __enter__(self):
+        self.startTime = time.time()
+        if self.verbose:
+            print(f"start {self.processName}")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.verbose:
+            elapsedTime = time.time() - self.startTime
+            print(f"    ...finished. : "
+                  + f"elapsed time = {elapsedTime:.2f}.sec")
+
+
 def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
               tablename: str, ssh_ip: str, ssh_username: str,
-              dbname: str = None, overwrite: bool = False,
+              dbname: str = None, ifExists: str = "error",
+              compress: str = None,
               ssh_password: str = None, ssh_keypath: str = None,
-              ssh_folder: str = None, saveIndex=False,
-              indexList: list = None, isIndexUnique: bool = True,
-              verbose: bool = True) -> None:
+              ssh_folder: str = None,
+              dump_folder: str = None,
+              saveIndex=False, indexList: list = None,
+              isIndexUnique: bool = True, verbose: bool = True) -> None:
 
-    # 1. save csv
-    if dbname is None:
-        dbname = engine.url.database
-    # use time for avoiding overwrite existing file
-    sourceName = f"tmp_{dbname}_{tablename}_{time.time():.0f}.csv"
-    if saveIndex:
-        df = df.reset_index()
-    df.to_csv(sourceName, index=False)
-    # by reading csv again, we can get same string format as csv
-    df_tmp = pd.read_csv(sourceName)
+    try:
+        # 1. save csv
+        if dbname is None:
+            dbname = engine.url.database
+        # use time for avoiding overwrite existing file
+        sourceName = f"tmp_{dbname}_{tablename}_{time.time():.0f}.csv"
+        if dump_folder is None:
+            dump_folder = pathlib.Path().cwd()
+        sourcePath = pathlib.Path(dump_folder)/sourceName
 
-    # 2. create table
-    createTable(df_tmp, engine, tablename, dbname,
-                overwrite, indexList, isIndexUnique)
+        if saveIndex:
+            df = df.reset_index()
+        with verbosity_context(f"dumping DF to {sourcePath}", verbose):
+            csvMade = df.to_csv(sourcePath, index=False)
+        # by reading csv again, we can get same string format as csv
+        with verbosity_context(f"re-reading {sourcePath}", verbose):
+            df = pd.read_csv(sourcePath)
 
-    # 3. copy file with scp
-    if ssh_folder is None:
-        ssh_folder = "~"
-    targetPath = "/" + sourceName
+        # 2. create table
+        createTable(df, engine, tablename, dbname,
+                    ifExists, indexList, isIndexUnique)
 
-    sshc = connectSSH(ssh_ip, ssh_username, ssh_password, keyPath=ssh_keypath)
-    uploadFile(sourceName, targetPath, sshc)
+        # 3. copy file with scp
+        sshc = connectSSH(ssh_ip, ssh_username,
+                          ssh_password, keyPath=ssh_keypath)
+        isSSHConnected = True
+        if ssh_folder is None:
+            _, tmp_out, _ = sshc.exec_command('pwd')
+            ssh_folder = tmp_out.readline().strip()
+        targetPath = pathlib.Path(ssh_folder)/sourceName
+        with verbosity_context(f"Uploading File {sourcePath} to {targetPath}",
+                               verbose):
+            uploadedPath = uploadFile(sourcePath, targetPath, sshc, compress,
+                                      verbose)
 
-    # 4. load file with tdload
-    tdloadViaSSH(engine=engine, sshc=sshc, tablename=tablename,
-                 targetFile=targetPath, dbname=dbname,
-                 skipRowNum=1, verbose=verbose)
+        # 4. load file with tdload
+        with verbosity_context(f"Loading File {uploadedPath} to DB", verbose):
+            tdloadViaSSH(engine=engine, sshc=sshc, tablename=tablename,
+                         targetPath=uploadedPath, dbname=dbname,
+                         skipRowNum=1, verbose=verbose)
 
-    # 5. delete tmp files and close connection
-    os.remove(sourceName)
-    sftp = sshc.open_sftp()
-    sftp.remove(targetPath)
-    sshc.close()
+    finally:
+        # 5. delete tmp files and close connection
+        if 'csvMade' in locals():
+            with verbosity_context(f"Deleting dumped file {sourcePath}",
+                                   verbose):
+                os.remove(sourcePath)
+        if 'uploadedPath' in locals():
+            sftp = sshc.open_sftp()
+            with verbosity_context(f"Deleting {uploadedPath} via SCP", verbose):
+                sftp.remove(str(uploadedPath))
+        if 'isSSHConnected' in locals():
+            with verbosity_context("Closing SSH", verbose):
+                sshc.close()
