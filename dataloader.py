@@ -1,17 +1,18 @@
 from sqlalchemy import create_engine, Integer, Float, String
-import sqlalchemy
+import numpy as np
 import pandas as pd
-import paramiko
-import scp
-import time
-import os
-import re
-import pathlib
-import subprocess
+import paramiko, sqlalchemy, scp, time, os, re, pathlib, subprocess
 
 
 def tableIsExist(tablename: str, dbname: str,
                  engine: sqlalchemy.engine.base.Engine) -> bool:
+    """
+    ===example===
+    from sqlalchemy import create_engine
+    engine = create_engine("teradata://dbc:dbc@hostip:1025")
+    tableIsExist("iris", "db_data", engine)
+    >>> True
+    """
     table_list = pd.read_sql_query(
         """select * from dbc.TablesV
         where TableName = '{tablename}'
@@ -22,16 +23,38 @@ def tableIsExist(tablename: str, dbname: str,
 
 def dropIfExists(tablename: str, dbname: str,
                  engine: sqlalchemy.engine.base.Engine) -> None:
+    """
+    ===example===
+    from sqlalchemy import create_engine
+    engine = create_engine("teradata://dbc:dbc@hostip:1025")
+    dropIfExists("iris", "db_data", engine)
+    droped table db_data.iris
+    >>> None
+    """
     if tableIsExist(tablename, dbname, engine):
         engine.execute(f"drop table {dbname}.{tablename}")
         print(f"droped table {dbname}.{tablename}")
 
 
 def dtypeParser(series: pd.Series) -> str:
-    """function to change pandas data type to Teradata data type"""
-    if series.dtype.name == "int64":
-        parsed_dtype = "Integer"
-    elif series.dtype.name == "float64":
+    """
+    function to change pandas data type to Teradata data type
+    ===example===
+    dtypeParser(df["petal_length"])
+    >>> "float"
+    """
+    if series.dtype.name.startswith("int"):
+        if series.max() < np.iinfo(np.int32).max and \
+                series.min() > np.iinfo(np.int32).min:
+            parsed_dtype = "integer"
+        elif series.max() < np.iinfo(np.int64).max and \
+                series.min() > np.iinfo(np.int64).min:
+            parsed_dtype = "bigint"
+        else:
+            max_length = max(1, max(series.astype(str).str.len())
+                             )  # at least 1 length
+            parsed_dtype = f"varchar({max_length})"
+    elif series.dtype.name.startswith("float64"):
         parsed_dtype = "float"
     else:
         max_length = max(1, max(series.astype(str).str.len())
@@ -56,12 +79,21 @@ def createTable(df: pd.DataFrame,
                 engine: sqlalchemy.engine.base.Engine,
                 tablename: str, dbname: str = None,
                 ifExists: str = "error", indexList: list = None,
-                isIndexUnique: bool = True) -> None:
+                isIndexUnique: bool = True, dtype: dict = {}
+                ) -> None:
+    """
+    ===example===
+    createTable(df_iris, engine, "iris", "db_data",
+                ifExists="replace")
+    >>> None
+    """
     # make query string
     if dbname is None:
         dbname = engine.url.database
     new_names = renameColumns(df.columns.to_series())
-    col_dtype = [dtypeParser(col) for _, col in df.iteritems()]
+    col_dtype = [dtypeParser(col) if name not in dtype else dtype[name]
+                 for name, col in df.iteritems()]
+
     column_query_part = "\n    ,".join(
         [f"{name} {dtype}" for name, dtype
          in zip(new_names, col_dtype)]
@@ -261,7 +293,7 @@ class verbosity_context:
 def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
               tablename: str, ssh_ip: str, ssh_username: str,
               dbname: str = None, ifExists: str = "error",
-              compress: str = None,
+              compress: str = None, dtype: dict = {},
               ssh_password: str = None, ssh_keypath: str = None,
               ssh_folder: str = None,
               dump_folder: str = None,
@@ -288,12 +320,13 @@ def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
 
         # 2. create table
         createTable(df, engine, tablename, dbname,
-                    ifExists, indexList, isIndexUnique)
+                    ifExists, indexList, isIndexUnique, dtype)
 
         # 3. copy file with scp
-        sshc = connectSSH(ssh_ip, ssh_username,
-                          ssh_password, keyPath=ssh_keypath)
-        isSSHConnected = True
+        with verbosity_context(f"connecting ssh", verbose):
+            sshc = connectSSH(ssh_ip, ssh_username,
+                              ssh_password, keyPath=ssh_keypath)
+            isSSHConnected = True
         if ssh_folder is None:
             _, tmp_out, _ = sshc.exec_command('pwd')
             ssh_folder = tmp_out.readline().strip()
@@ -317,7 +350,8 @@ def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
                 os.remove(sourcePath)
         if 'uploadedPath' in locals():
             sftp = sshc.open_sftp()
-            with verbosity_context(f"Deleting {uploadedPath} via SCP", verbose):
+            with verbosity_context(f"Deleting {uploadedPath} via SCP",
+                                   verbose):
                 sftp.remove(str(uploadedPath))
         if 'isSSHConnected' in locals():
             with verbosity_context("Closing SSH", verbose):
