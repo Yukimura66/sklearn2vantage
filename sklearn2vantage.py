@@ -139,7 +139,7 @@ def make_model_table_tree(model, feature_names, isRegression=False):
 
 
 def load_model_tree(df_model, engine, table_name):
-    def max_len(x): 
+    def max_len(x):
         return int(np.nan_to_num(df_model[x].str.len().max(), nan=1))
     dtype_tree_model = {"node_id": Integer, "node_size": Integer,
                         "node_gini": Float, "node_entropy": Float,
@@ -176,8 +176,9 @@ def dict2json(obj: dict) -> str:
 
 def makeTreeJson(tree: sklearn.tree._tree.Tree, idx_node: int,
                  features: list, isRegression: bool = False,
-                 classes: list = None, depth: int = 0) -> str:
-    if isRegression and tree.criterion != "mse":
+                 classes: list = None, depth: int = 0,
+                 coef: float = 1.0, const: float = 0.0) -> str:
+    if isRegression and "mse" not in tree.criterion:
         raise ValueError("criterion must be 'mse'")
 
     id_trees = calcIdTrees(tree)
@@ -187,9 +188,11 @@ def makeTreeJson(tree: sklearn.tree._tree.Tree, idx_node: int,
                  "id_": id_trees[idx_node]}
     if isRegression:
         tree_dict.update({
-            "sum_": tree.tree_.value.squeeze()[idx_node]
+            "sum_": (tree.tree_.value.squeeze()[idx_node] * coef + const)
             * tree.tree_.n_node_samples[idx_node],
-            "sumSq_": tree.tree_.impurity[idx_node]
+            "sumSq_": (tree.tree_.impurity[idx_node] * coef**2
+                       + (tree.tree_.value.squeeze()[idx_node] * coef
+                          + const)**2)
             * tree.tree_.n_node_samples[idx_node]
         })
 
@@ -212,10 +215,10 @@ def makeTreeJson(tree: sklearn.tree._tree.Tree, idx_node: int,
                  "scoreImprove_": calcScoreImprove(tree, idx_node)},
              "leftChild_": makeTreeJson(
                  tree, tree.tree_.children_left[idx_node], features,
-                 isRegression, classes, depth+1),
+                 isRegression, classes, depth+1, coef, const),
              "rightChild_": makeTreeJson(
                  tree, tree.tree_.children_right[idx_node], features,
-                 isRegression, classes, depth+1),
+                 isRegression, classes, depth+1, coef, const),
              "nodeType_": f"{type_str}_NODE"
              }
         )
@@ -232,9 +235,7 @@ def makeTreeJson(tree: sklearn.tree._tree.Tree, idx_node: int,
             {"maxDepth_": 0,
              "nodeType_": f"{type_str}_LEAF"}
         )
-        if isRegression:
-            tree_dict.update({"value_": tree.tree_.value.squeeze()[idx_node]})
-        else:
+        if not isRegression:
             tree_dict.update({
                 "label_": str(classes[
                     int(tree.classes_[
@@ -286,12 +287,23 @@ def calcScoreImprove(tree, idx_node) -> float:
 
 def make_model_table_forest(model, feature_names, classes: list = None,
                             isRegression=False):
+    # Gradient Boost or not( = Random Forest)
+    if isinstance(model, sklearn.ensemble._gb.GradientBoostingRegressor):
+        estimators = model.estimators_.squeeze().tolist()
+        coef = model.learning_rate * model.n_estimators
+        const = model.init_.constant_.item()
+    else:
+        estimators = model.estimators_
+        coef = 1.0
+        const = 0.0
+
     forest_table = pd.DataFrame(
         {"worker_ip": ["100.0.0.0"] * model.n_estimators,
          "task_index": [0] * model.n_estimators,
          "tree_num": np.arange(model.n_estimators),
-         "tree": [makeTreeJson(a_tree, 0, feature_names, isRegression, classes)
-                  for a_tree in model.estimators_]
+         "tree": [makeTreeJson(a_tree, 0, feature_names, isRegression,
+                               classes, 0, coef, const)
+                  for a_tree in estimators]
          }
     )
     return forest_table
