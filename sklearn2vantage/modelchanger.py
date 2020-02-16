@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, Float, String
 import itertools
 import sklearn.tree
 from sqlalchemy_teradata.types import CLOB
+from . import dataloader
 
 
 def make_model_table_glm(model, feature_names=None, isLogistic=False,
@@ -26,11 +27,12 @@ def make_model_table_glm(model, feature_names=None, isLogistic=False,
 
 
 def load_model_glm(df_model, engine, table_name):
+    dataloader.dropIfExists(table_name, engine.url.database, engine)
     dtype_glm_model = {"attribute": Integer, "predictor": String(length=30),
                        "category": String(length=30), "estimate": Float,
                        "family": String(length=30)}
     df_model.to_sql(name=table_name, con=engine,
-                    index=False, if_exists="replace",
+                    index=False,
                     dtype=dtype_glm_model)
 
 
@@ -74,8 +76,9 @@ def load_model_nb(df_model, engine, table_name):
                        "category": String(length=max_len("category")),
                        "cnt": Integer, "sum_nb": Float,
                        "sumSq": Float, "totalCnt": Integer}
+    dataloader.dropIfExists(table_name, engine.url.database, engine)
     df_model.to_sql(name=table_name, con=engine,
-                    index=False, if_exists="replace",
+                    index=False,
                     dtype=dtype_glm_model)
 
 
@@ -162,8 +165,9 @@ def load_model_tree(df_model, engine, table_name):
                         "prob_label_order":
                             String(length=max_len("prob_label_order")),
                         "attribute": String(length=max_len("attribute"))}
+    dataloader.dropIfExists(table_name, engine.url.database, engine)
     df_model.to_sql(name=table_name, con=engine,
-                    index=False, if_exists="replace",
+                    index=False,
                     dtype=dtype_tree_model)
 
 
@@ -315,6 +319,7 @@ def load_model_forest(df_model, engine, table_name):
                         "task_index": Integer,
                         "tree_num": Integer,
                         "tree": CLOB}
+    dataloader.dropIfExists(table_name, engine.url.database, engine)
     df_model.to_sql(name=table_name, con=engine,
-                    index=False, if_exists="replace",
+                    index=False,
                     dtype=dtype_tree_model)
