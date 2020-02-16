@@ -1,7 +1,8 @@
 from setuptools import setup, find_packages
 
 requires = ["numpy", "pandas", "SQLAlchemy", "scikit-learn", "teradata",
-            "sqlalchemy-teradata", "paramiko", "scp"]
+            "sqlalchemy-teradata", "teradatasql", "teradatasqlalchemy"
+            "paramiko", "scp"]
 
 setup(
     name="sklearn2vantage",
