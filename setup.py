@@ -1,12 +1,12 @@
 from setuptools import setup, find_packages
 
 requires = ["numpy", "pandas", "SQLAlchemy", "scikit-learn", "teradata",
-            "sqlalchemy-teradata", "teradatasql", "teradatasqlalchemy"
+            "sqlalchemy-teradata", "teradatasql", "teradatasqlalchemy",
             "paramiko", "scp"]
 
 setup(
     name="sklearn2vantage",
-    version="0.1.3",
+    version="0.1.4",
     description="Module for converting sklearn model to Teradata Vantage"
                 + " model",
     url="https://github.com/Yukimura66/sklearn2vantage",
