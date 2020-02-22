@@ -119,4 +119,4 @@ Example: data loading
                 ifExists="replace", ssh_ip="173.168.56.128",
                 ssh_username="root", ssh_password="root")
 
-For further usage, please see `HowToUseDataloader.ipyn <https://github.com/Yukimura66/sklearn2vantage/blob/master/HowToUseDataloader.ipynb>`_.
+For further usage, please see `HowToUseDataloader.ipynb <https://github.com/Yukimura66/sklearn2vantage/blob/master/HowToUseDataloader.ipynb>`_.
