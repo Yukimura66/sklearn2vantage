@@ -6,7 +6,7 @@ requires = ["numpy", "pandas", "SQLAlchemy", "scikit-learn", "teradata",
 
 setup(
     name="sklearn2vantage",
-    version="0.1.4",
+    version="0.1.5",
     description="Module for converting sklearn model to Teradata Vantage"
                 + " model",
     url="https://github.com/Yukimura66/sklearn2vantage",
