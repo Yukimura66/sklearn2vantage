@@ -9,7 +9,7 @@ with open('README.rst', encoding='utf-8') as readme_file:
 
 setup(
     name="sklearn2vantage",
-    version="0.1.6",
+    version="0.1.7",
     description="Module for converting sklearn model to Teradata Vantage"
                 + " model",
     long_description=readme,
