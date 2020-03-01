@@ -240,8 +240,9 @@ def uploadFile(sourcePath: str, targetPath: str,
 def tdloadViaSSH(engine: sqlalchemy.engine.base.Engine,
                  sshc: paramiko.client.SSHClient,
                  tablename: str, targetPath: str,
+                 jobname: str, 
                  dbname: str = None,
-                 jobname: str = "jobtmp", skipRowNum: int = 0,
+                 skipRowNum: int = 0,
                  verbose: bool = True) -> None:
 
     targetPath = pathlib.Path(targetPath)
@@ -339,8 +340,9 @@ def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
         # 4. load file with tdload
         with verbosity_context(f"Loading File {uploadedPath} to DB", verbose):
             tdloadViaSSH(engine=engine, sshc=sshc, tablename=tablename,
-                         targetPath=uploadedPath, dbname=dbname,
-                         skipRowNum=1, verbose=verbose)
+                         targetPath=uploadedPath,
+                         jobname="load_" + sourceName,
+                         dbname=dbname, skipRowNum=1, verbose=verbose)
 
     finally:
         # 5. delete tmp files and close connection
