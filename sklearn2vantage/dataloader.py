@@ -358,3 +358,64 @@ def tdload_df(df: pd.DataFrame, engine: sqlalchemy.engine.base.Engine,
         if 'isSSHConnected' in locals():
             with verbosity_context("Closing SSH", verbose):
                 sshc.close()
+
+
+def tdload_csv(csvPath: str, engine: sqlalchemy.engine.base.Engine,
+               tablename: str, ssh_ip: str, ssh_username: str,
+               dbname: str = None, ifExists: str = "error",
+               compress: str = None, dtype: dict = {},
+               ssh_password: str = None, ssh_keypath: str = None,
+               ssh_folder: str = None,
+               dump_folder: str = None,
+               indexList: list = None,
+               isIndexUnique: bool = True, verbose: bool = True) -> None:
+    try:
+        if dbname is None:
+            dbname = engine.url.database
+        # use time for avoiding overwrite existing file
+        sourceName = f"tmp_{dbname}_{tablename}_{time.time():.0f}.csv"
+
+        # 1. by reading csv, we can get same string format as csv
+        with verbosity_context(f"re-reading {csvPath}", verbose):
+            df = pd.read_csv(csvPath)
+
+        # 2. create table
+        createTable(df, engine, tablename, dbname,
+                    ifExists, indexList, isIndexUnique, dtype)
+
+        # 3. copy file with scp
+        with verbosity_context(f"connecting ssh", verbose):
+            sshc = connectSSH(ssh_ip, ssh_username,
+                              ssh_password, keyPath=ssh_keypath)
+            isSSHConnected = True
+        if ssh_folder is None:
+            _, tmp_out, _ = sshc.exec_command('pwd')
+            ssh_folder = tmp_out.readline().strip()
+        targetPath = pathlib.Path(ssh_folder)/sourceName
+        with verbosity_context(f"Uploading File {csvPath} to {targetPath}",
+                               verbose):
+            uploadedPath = uploadFile(csvPath, targetPath, sshc, compress,
+                                      verbose)
+
+        # 4. load file with tdload
+        with verbosity_context(f"Loading File {uploadedPath} to DB", verbose):
+            tdloadViaSSH(engine=engine, sshc=sshc, tablename=tablename,
+                         targetPath=uploadedPath,
+                         jobname="load_" + sourceName,
+                         dbname=dbname, skipRowNum=1, verbose=verbose)
+
+    finally:
+        # 5. delete tmp files and close connection
+        if 'uploadedPath' in locals():
+            sftp = sshc.open_sftp()
+            with verbosity_context(f"Deleting {uploadedPath} via SCP",
+                                   verbose):
+                sftp.remove(str(uploadedPath))
+        if 'isSSHConnected' in locals():
+            with verbosity_context("Closing SSH", verbose):
+                sshc.close()
+
+
+def tdbuild_insert():
+    # ToDo
+    pass
